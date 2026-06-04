@@ -23,7 +23,6 @@ spring:
                 - Path=/orders/**
               filters:
                 - StripPrefix=1
-                - RedirectTo=302, http://codingshuttle.com
 
 eureka:
   client:
