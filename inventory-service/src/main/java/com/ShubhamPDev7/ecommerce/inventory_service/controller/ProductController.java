@@ -1,7 +1,9 @@
 package com.ShubhamPDev7.ecommerce.inventory_service.controller;
 
+import com.ShubhamPDev7.ecommerce.inventory_service.clients.OrdersFeignClient;
 import com.ShubhamPDev7.ecommerce.inventory_service.dto.ProductDto;
 import com.ShubhamPDev7.ecommerce.inventory_service.service.ProductService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cloud.client.ServiceInstance;
@@ -25,18 +27,24 @@ public class ProductController {
     private final DiscoveryClient discoveryClient;
     private final RestClient restClient;
 
+    private final OrdersFeignClient ordersFeignClient;
+
     @GetMapping("/fetchOrders")
-    public ResponseEntity<String> fetchFromOrdersService() {
-        ServiceInstance orderService = discoveryClient.getInstances("order-service").getFirst();
+    public String fetchFromOrderService(HttpServletRequest httpServletRequest) {
 
-        String response = restClient.get()
-                .uri(orderService.getUri()+"/core/helloOrders")
-                .retrieve()
-                .body(String.class);
+        log.info(httpServletRequest.getHeader("x-custom-header"));
+//        ServiceInstance orderService = discoveryClient.getInstances("order-service").getFirst();
 
-        return ResponseEntity.ok(response);
+//        String response = restClient.get()
+//                .uri(orderService.getUri()+"/core/helloOrders")
+//                .retrieve()
+//                .body(String.class);
+
+        return ordersFeignClient.helloOrders();
 
     }
+
+
 
     @GetMapping
     public ResponseEntity<List<ProductDto>> getAllInventory() {
