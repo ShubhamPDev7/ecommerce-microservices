@@ -2,16 +2,16 @@
 
 # 🛒 E-Commerce Microservices
 
-**A production-inspired microservices architecture built with Spring Boot & Spring Cloud**
+**A course-driven microservices project built with Spring Boot & Spring Cloud — covering service discovery, reactive routing, OpenFeign communication, and Resilience4j fault tolerance.**
 
 [![Java](https://img.shields.io/badge/Java-21-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
-[![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.5.x-6DB33F?style=for-the-badge&logo=spring-boot&logoColor=white)](https://spring.io/projects/spring-boot)
-[![Spring Cloud](https://img.shields.io/badge/Spring_Cloud-2025.x-6DB33F?style=for-the-badge&logo=spring&logoColor=white)](https://spring.io/projects/spring-cloud)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Latest-316192?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![Maven](https://img.shields.io/badge/Maven-Build-C71A36?style=for-the-badge&logo=apache-maven&logoColor=white)](https://maven.apache.org/)
+[![Spring Boot](https://img.shields.io/badge/Spring_Boot-4.0.6-6DB33F?style=for-the-badge&logo=spring-boot&logoColor=white)](https://spring.io/projects/spring-boot)
+[![Spring Cloud](https://img.shields.io/badge/Spring_Cloud-2025.1.1-6DB33F?style=for-the-badge&logo=spring&logoColor=white)](https://spring.io/projects/spring-cloud)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-JPA-316192?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Resilience4j](https://img.shields.io/badge/Resilience4j-Circuit_Breaker-EF4D23?style=for-the-badge)](https://resilience4j.readme.io/)
 [![Status](https://img.shields.io/badge/Status-WIP-yellow?style=for-the-badge)](#)
 
-*A hands-on learning project exploring service decomposition, dynamic discovery, reactive routing, and synchronous inter-service communication.*
+*Covers modules 12.1 – 12.6: Microservice Architecture · Eureka · API Gateway · OpenFeign · Circuit Breaker, Retry & Rate Limiter*
 
 </div>
 
@@ -20,34 +20,37 @@
 ## 📐 Architecture Overview
 
 ```
-                        ┌─────────────────────────────────────┐
-                        │         Discovery Service           │
-                        │      (Netflix Eureka)  :8761        │
-                        │                                     │
-                        │  inventory-service ──► registered   │
-                        │  order-service     ──► registered   │
-                        └────────────────┬────────────────────┘
-                                         │ service registry
-                     ┌───────────────────┼───────────────────┐
-                     │                   │                   │
-              ┌──────▼──────┐            │           ┌───────▼──────┐
-              │ API Gateway │            │           │ API Gateway  │
-              │  :8080      │◄───────────┘           │ (resolves    │
-              │ (WebFlux)   │   lookup & route        │  via LB)     │
-              └──────┬──────┘                        └──────────────┘
-                     │
-         ┌───────────┴───────────┐
-         │                       │
-  ┌──────▼──────┐         ┌──────▼──────┐
-  │  Inventory  │◄────────│    Order    │
-  │  Service    │ Feign   │  Service    │
-  │  :8081      │ (stock  │  :8082      │
-  └─────────────┘  check) └─────────────┘
-         │                       │
-    ┌────▼────┐             ┌────▼────┐
-    │   DB    │             │   DB    │
-    │ (PG)    │             │ (PG)    │
-    └─────────┘             └─────────┘
+  Client
+    │
+    ▼
+┌─────────────────────────────────────────────────────┐
+│              API Gateway  :8080                     │
+│         (Spring Cloud Gateway / WebFlux)            │
+│                                                     │
+│  /inventory/** ──► StripPrefix + X-Custom-Header    │
+│  /orders/**    ──► StripPrefix                      │
+└────────┬────────────────────┬────────────────────── ┘
+         │  lb://              │  lb://
+         ▼                     ▼
+┌────────────────┐    ┌────────────────────────────┐
+│Inventory Svc   │    │      Order Service         │
+│  :9010         │    │                            │
+│                │◄───│  @CircuitBreaker           │
+│  /products/**  │    │  @Retry                    │
+│                │    │  @RateLimiter              │
+└───────┬────────┘    └────────────────────────────┘
+        │ Feign                  │ Feign
+        │ helloOrders()          │ reduceStocks()
+        └────────────────────────┘
+
+         ┌──────────────────────────┐
+         │   Discovery Server       │
+         │   (Netflix Eureka) :8761 │
+         │                          │
+         │  inventory-service ──►   │
+         │  order-service     ──►   │
+         │  api-gateway       ──►   │
+         └──────────────────────────┘
 ```
 
 ---
@@ -56,42 +59,101 @@
 
 | Service | Port | Description |
 |---|---|---|
-| 🌐 **API Gateway** | `8080` | Single external entry point; handles dynamic routing & load balancing via Eureka |
-| 🔍 **Discovery Service** | `8761` | Netflix Eureka Server — central registry for all microservices |
-| 📦 **Inventory Service** | `8081` | REST API for managing product stock levels |
-| 📋 **Order Service** | `8082` | REST API for order creation and status tracking |
-
----
-
-## 💻 Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Language | Java 21 |
-| Framework | Spring Boot 3.5.x |
-| Gateway | Spring Cloud Gateway (Reactive / WebFlux) |
-| Service Discovery | Spring Cloud Netflix Eureka |
-| Inter-Service Comms | OpenFeign + Spring Cloud LoadBalancer |
-| Database | PostgreSQL + Spring Data JPA |
-| Build | Apache Maven |
-| Utilities | Lombok, ModelMapper |
+| 🌐 **API Gateway** | `8080` | Reactive entry point; routes `/inventory/**` and `/orders/**` with load balancing |
+| 🔍 **Discovery Server** | `8761` | Netflix Eureka — all services self-register on startup |
+| 📦 **Inventory Service** | `9010` | Manages product stock; exposes reduce-stocks endpoint for order creation |
+| 📋 **Order Service** | — | Creates orders; calls Inventory via Feign with Circuit Breaker protection |
 
 ---
 
 ## ✨ Features
 
 ### 🔍 Service Discovery & Routing
-- **Eureka Server** — microservices self-register on startup; no hardcoded addresses
-- **Reactive API Gateway** — routes requests to internal services with path-prefix stripping
-- **Client-Side Load Balancing** — Spring Cloud LoadBalancer resolves instances seamlessly
+- **Eureka Server** — services register dynamically; no hardcoded IPs anywhere
+- **Reactive API Gateway** — routes with `StripPrefix` filters; injects `X-Custom-Header` on inventory routes
+- **Client-Side Load Balancing** — `lb://` URIs resolved via Spring Cloud LoadBalancer
 
 ### 🔗 Inter-Service Communication
-- **OpenFeign Clients** — declarative REST clients for clean, readable service-to-service calls
-- **Transactional Stock Management** — Order Service verifies and deducts inventory in real-time via Feign during order creation
+- **OpenFeign clients** — `InventoryOpenFeignClient` (Order → Inventory) and `OrdersFeignClient` (Inventory → Order)
+- **Stock reduction flow** — on order creation, Order Service calls `PUT /products/reduce-stocks` on Inventory Service via Feign; Inventory validates stock, deducts quantities, and returns the total price
 
-### 🗄️ Data & Configuration
-- **Independent Databases** — each service owns its own PostgreSQL schema (database-per-service pattern)
-- **Secure Configuration** — credentials excluded from version control via `.gitignore`; `.example` template files provided for local setup
+### 🛡️ Fault Tolerance with Resilience4j
+
+All three patterns are configured on the `createOrder` method (switchable via annotations):
+
+| Pattern | Config |
+|---|---|
+| **Circuit Breaker** | Sliding window: 10 calls · Failure threshold: 50% · Open wait: 20s · Half-open calls: 3 |
+| **Retry** | Max attempts: 3 · Wait between retries: 100ms |
+| **Rate Limiter** | 100 requests/s · Timeout: 10ms |
+
+Fallback method `createOrderFallback()` returns an empty `OrderRequestDto` and logs the cause when the circuit opens.
+
+### 🗄️ Data Model
+
+**Inventory Service** — `products` table:
+
+```
+Product { id, title, price, stock }
+```
+
+**Order Service** — `orders` + `order_items` tables:
+
+```
+Orders { id, orderStatus (CONFIRMED/CANCELLED/PENDING), totalPrice }
+  └── OrderItem { id, productId, quantity, order_id }
+```
+
+---
+
+## 📡 API Reference
+
+### 📦 Inventory Service — via Gateway at `/inventory`
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/products` | List all products with stock |
+| `GET` | `/products/{id}` | Get product by ID |
+| `PUT` | `/products/reduce-stocks` | Deduct stock for an order (called by Order Service) |
+| `GET` | `/products/fetchOrders` | Test endpoint — calls Order Service via Feign |
+
+### 📋 Order Service — via Gateway at `/orders`
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/core` | List all orders |
+| `GET` | `/core/{id}` | Get order by ID |
+| `POST` | `/core/create-order` | Create order (triggers stock reduction + Circuit Breaker) |
+| `GET` | `/core/helloOrders` | Health check / Feign test endpoint |
+
+### Request body for `POST /orders/core/create-order`
+
+```json
+{
+  "items": [
+    { "productId": 1, "quantity": 2 },
+    { "productId": 3, "quantity": 1 }
+  ]
+}
+```
+
+---
+
+## 💻 Tech Stack
+
+| Concern | Technology |
+|---|---|
+| Language | Java 21 |
+| Framework | Spring Boot 4.0.6 |
+| Gateway | Spring Cloud Gateway (Reactive / WebFlux) |
+| Service Discovery | Spring Cloud Netflix Eureka (`2025.1.1`) |
+| Inter-Service Comms | OpenFeign + Spring Cloud LoadBalancer |
+| Fault Tolerance | Resilience4j — Circuit Breaker, Retry, Rate Limiter |
+| Database | PostgreSQL — Spring Data JPA / Hibernate |
+| Object Mapping | ModelMapper 3.2.0 |
+| Observability | Spring Boot Actuator (health, circuit breaker indicators) |
+| Build | Apache Maven |
+| Utilities | Lombok |
 
 ---
 
@@ -99,14 +161,27 @@
 
 ```
 eCommerce/
-├── api-gateway/              ← Port 8080 | Spring Cloud Gateway (WebFlux)
-│   └── src/
-├── discovery-service/        ← Port 8761 | Netflix Eureka Server
-│   └── src/
-├── inventory-service/        ← Port 8081 | Product stock management
-│   └── src/
-└── order-service/            ← Port 8082 | Order lifecycle management
-    └── src/
+├── api-gateway/                          ← Port 8080 | Spring Cloud Gateway
+│   └── src/main/resources/
+│       └── application.yml              ← Route definitions
+│
+├── discovery-service/                    ← Port 8761 | Netflix Eureka Server
+│
+├── inventory-service/                    ← Port 9010 | Product & stock management
+│   └── src/main/java/.../inventory_service/
+│       ├── clients/OrdersFeignClient     ← Feign client → Order Service
+│       ├── controller/ProductController
+│       ├── service/ProductService        ← reduceStocks() transactional logic
+│       ├── entity/Product
+│       └── dto/
+│
+└── order-service/                        ← Order creation & management
+    └── src/main/java/.../order_service/
+        ├── clients/InventoryOpenFeignClient  ← Feign client → Inventory Service
+        ├── controller/OrdersController
+        ├── service/OrdersService         ← @CircuitBreaker on createOrder()
+        ├── entity/{Orders, OrderItem, OrderStatus}
+        └── dto/
 ```
 
 ---
@@ -117,70 +192,74 @@ eCommerce/
 
 - Java 21+
 - Maven 3.9+
-- PostgreSQL (running locally or via Docker)
+- PostgreSQL
 
-### Boot Order
+### Database Setup
 
-Services must start in this order:
+Create two databases in PostgreSQL:
 
-```bash
-# 1. Start the Eureka Discovery Service first
-cd discovery-service && mvn spring-boot:run
-
-# 2. Start backend services (order doesn't matter between these two)
-cd inventory-service && mvn spring-boot:run
-cd order-service && mvn spring-boot:run
-
-# 3. Start the API Gateway last
-cd api-gateway && mvn spring-boot:run
+```sql
+CREATE DATABASE inventoryDB;
+CREATE DATABASE orderDB;
 ```
 
 ### Configuration
 
-Copy the example files and fill in your credentials:
+Update credentials in the `application.properties` of each service:
+
+```properties
+# inventory-service/src/main/resources/application.properties
+spring.datasource.url=jdbc:postgresql://localhost:5432/inventoryDB
+spring.datasource.username=your_username
+spring.datasource.password=your_password
+
+# order-service/src/main/resources/application.properties
+spring.datasource.url=jdbc:postgresql://localhost:5432/orderDB
+spring.datasource.username=your_username
+spring.datasource.password=your_password
+```
+
+### Boot Order
 
 ```bash
-cp inventory-service/src/main/resources/application.example.yml \
-   inventory-service/src/main/resources/application.yml
+# 1. Start Eureka Discovery Server first
+cd discovery-service && ./mvnw spring-boot:run
 
-cp order-service/src/main/resources/application.example.yml \
-   order-service/src/main/resources/application.yml
+# 2. Start the API Gateway
+cd api-gateway && ./mvnw spring-boot:run
+
+# 3. Start application services (any order)
+cd inventory-service && ./mvnw spring-boot:run
+cd order-service && ./mvnw spring-boot:run
 ```
 
-### Verify
+Verify all services registered at: **`http://localhost:8761`**
 
-Once all services are up, visit the Eureka dashboard to confirm registrations:
+### Observability
+
+Circuit breaker health is exposed via Actuator:
 
 ```
-http://localhost:8761
+GET http://localhost:<order-service-port>/actuator/health
 ```
 
 ---
 
-## 🗺️ Roadmap
+## 🗺️ Course Modules Covered
 
-The following features are planned as part of this learning journey:
-
-- [ ] **Kafka** — asynchronous messaging and event-driven architecture
-- [ ] **Resilience4j** — circuit breakers and fault tolerance
-- [ ] **Redis** — distributed caching
-- [ ] **Micrometer + Zipkin** — distributed tracing
-- [ ] **Docker** — containerization and multi-service `docker-compose`
-- [ ] **Kubernetes** — orchestration and deployment
-- [ ] **Spring Cloud Config** — centralized configuration management
-
----
-
-## 🧭 Learning Goals
-
-This project is part of an ongoing backend engineering journey, exploring:
-
-> *Service decomposition · Dynamic service discovery · Reactive API routing · Synchronous inter-service communication · Independent data ownership · Cloud-native patterns*
+| Module | Topic | Status |
+|---|---|---|
+| 12.1 | Introduction to Microservice Architecture | ✅ |
+| 12.2 | Setting up the Inventory Management System | ✅ |
+| 12.3 | Service Registration & Discovery with Eureka | ✅ |
+| 12.4 | Spring Cloud API Gateway | ✅ |
+| 12.5 | OpenFeign Microservice Communication | ✅ |
+| 12.6 | Circuit Breaker, Retry & Rate Limiter with Resilience4j | ✅ |
 
 ---
 
 <div align="center">
 
-**🚧 Work in Progress** — built as a backend engineering deep-dive into Java, Spring Boot, and modern Microservices Architecture.
+Built by [ShubhamPDev7](https://github.com/ShubhamPDev7) as part of a backend engineering deep-dive into Java, Spring Boot, and Microservices Architecture.
 
 </div>
