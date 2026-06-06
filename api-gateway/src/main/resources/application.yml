@@ -24,6 +24,14 @@ spring:
               filters:
                 - StripPrefix=1
 
+            - id: shipping-service
+              uri: lb://SHIPPING-SERVICE
+              predicates:
+                - Path=/shipping/**
+              filters:
+                - StripPrefix=1
+
+
 eureka:
   client:
     service-url:

@@ -10,4 +10,6 @@ public class OrderRequestDto {
     private Long id;
     private List<OrderRequestItemDto> items;
     private BigDecimal totalPrice;
+
+    private String shippingAddress;
 }
