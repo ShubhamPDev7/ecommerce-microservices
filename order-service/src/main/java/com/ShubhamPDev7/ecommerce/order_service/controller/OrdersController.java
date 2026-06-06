@@ -45,5 +45,11 @@ public class OrdersController {
         return ResponseEntity.ok(order);
     }
 
+    @DeleteMapping("/{id}")
+    public ResponseEntity<OrderRequestDto> cancelOrder(@PathVariable Long id) {
+        log.info("Cancel order request received with id: {}",id);
+        OrderRequestDto cancelledOrder = ordersService.cancelOrder(id);
+        return ResponseEntity.ok(cancelledOrder);
+    }
 
 }

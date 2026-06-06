@@ -62,4 +62,11 @@ public class ProductController {
         return ResponseEntity.ok(totalPrice);
     }
 
+    @PutMapping("/restock-items")
+    public ResponseEntity<String> restockItem(@RequestBody OrderRequestDto orderRequestDto) {
+        log.info("Restock request received for {} items", orderRequestDto.getItems().size());
+        productService.restockItem(orderRequestDto);
+        return ResponseEntity.ok("Item restocked successfully");
+    }
+
 }
