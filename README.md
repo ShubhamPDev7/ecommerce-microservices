@@ -13,6 +13,8 @@
 
 *Covers modules 12.1 – 12.6: Microservice Architecture · Eureka · API Gateway · OpenFeign · Circuit Breaker, Retry & Rate Limiter*
 
+*Homework: MakeMyTrip Architecture Design · Cancel Order & Restock · ShippingService with Fault Tolerance*
+
 </div>
 
 ---
@@ -23,25 +25,27 @@
   Client
     │
     ▼
-┌─────────────────────────────────────────────────────┐
-│              API Gateway  :8080                     │
-│         (Spring Cloud Gateway / WebFlux)            │
-│                                                     │
-│  /inventory/** ──► StripPrefix + X-Custom-Header    │
-│  /orders/**    ──► StripPrefix                      │
-└────────┬────────────────────┬────────────────────── ┘
-         │  lb://              │  lb://
-         ▼                     ▼
-┌────────────────┐    ┌────────────────────────────┐
-│Inventory Svc   │    │      Order Service         │
-│  :9010         │    │                            │
-│                │◄───│  @CircuitBreaker           │
-│  /products/**  │    │  @Retry                    │
-│                │    │  @RateLimiter              │
-└───────┬────────┘    └────────────────────────────┘
-        │ Feign                  │ Feign
-        │ helloOrders()          │ reduceStocks()
-        └────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                   API Gateway  :8080                         │
+│            (Spring Cloud Gateway / WebFlux)                  │
+│                                                              │
+│  /inventory/** ──► StripPrefix + X-Custom-Header             │
+│  /orders/**    ──► StripPrefix                               │
+│  /shipping/**  ──► StripPrefix                    [NEW]      │
+└────────┬─────────────────────┬──────────────────────┬────────┘
+         │  lb://              │  lb://               │  lb://
+         ▼                     ▼                      ▼
+┌────────────────┐   ┌──────────────────────┐  ┌─────────────────┐
+│Inventory Svc   │   │    Order Service     │  │ Shipping Svc    │
+│  :8081         │   │      :9020           │  │   :8083   [NEW] │
+│                │◄──│                      │  │                 │
+│  /products/**  │   │  @CircuitBreaker     │──► /shipments/**  │
+│  reduceStocks  │   │  @Retry              │  │  initiateShip.. │
+│  restockItems  │   │  @RateLimiter        │  │  getStatus      │
+│    [NEW]       │   │                      │  └─────────────────┘
+└───────┬────────┘   └──────────────────────┘
+        │ Feign (both directions)
+        └──────────────────────┘
 
          ┌──────────────────────────┐
          │   Discovery Server       │
@@ -49,6 +53,7 @@
          │                          │
          │  inventory-service ──►   │
          │  order-service     ──►   │
+         │  shipping-service  ──►   │  [NEW]
          │  api-gateway       ──►   │
          └──────────────────────────┘
 ```
@@ -59,10 +64,11 @@
 
 | Service | Port | Description |
 |---|---|---|
-| 🌐 **API Gateway** | `8080` | Reactive entry point; routes `/inventory/**` and `/orders/**` with load balancing |
+| 🌐 **API Gateway** | `8080` | Reactive entry point; routes `/inventory/**`, `/orders/**`, and `/shipping/**` with load balancing |
 | 🔍 **Discovery Server** | `8761` | Netflix Eureka — all services self-register on startup |
-| 📦 **Inventory Service** | `9010` | Manages product stock; exposes reduce-stocks endpoint for order creation |
-| 📋 **Order Service** | — | Creates orders; calls Inventory via Feign with Circuit Breaker protection |
+| 📦 **Inventory Service** | `8081` | Manages product stock; exposes reduce-stocks and restock-items endpoints |
+| 📋 **Order Service** | `9020` | Creates and cancels orders; calls Inventory and Shipping via Feign with Circuit Breaker protection |
+| 🚚 **Shipping Service** | `8083` | **[NEW]** Initiates and tracks shipments; called by Order Service after order confirmation |
 
 ---
 
@@ -74,8 +80,17 @@
 - **Client-Side Load Balancing** — `lb://` URIs resolved via Spring Cloud LoadBalancer
 
 ### 🔗 Inter-Service Communication
-- **OpenFeign clients** — `InventoryOpenFeignClient` (Order → Inventory) and `OrdersFeignClient` (Inventory → Order)
+- **OpenFeign clients** — `InventoryOpenFeignClient` (Order → Inventory), `ShippingOpenFeignClient` (Order → Shipping) **[NEW]**, and `OrdersFeignClient` (Inventory → Order)
 - **Stock reduction flow** — on order creation, Order Service calls `PUT /products/reduce-stocks` on Inventory Service via Feign; Inventory validates stock, deducts quantities, and returns the total price
+- **Shipping initiation flow** — after order is saved, Order Service calls `POST /shipments/initiate` on Shipping Service via Feign **[NEW]**
+- **Cancel & restock flow** — on order cancellation, Order Service calls `PUT /products/restock-items` on Inventory Service via Feign to add quantities back **[NEW]**
+
+### ❌ Order Cancellation & Restocking **[NEW]**
+- `DELETE /orders/core/{id}` cancels a confirmed order
+- Validates order exists and is not already cancelled
+- Manually maps `OrderItem` entities to DTOs (avoids ModelMapper infinite recursion on bidirectional `@ManyToOne` relationship)
+- Calls Inventory Service via Feign to restock all items from the cancelled order
+- Updates order status to `CANCELLED` and persists
 
 ### 🛡️ Fault Tolerance with Resilience4j
 
@@ -87,7 +102,8 @@ All three patterns are configured on the `createOrder` method (switchable via an
 | **Retry** | Max attempts: 3 · Wait between retries: 100ms |
 | **Rate Limiter** | 100 requests/s · Timeout: 10ms |
 
-Fallback method `createOrderFallback()` returns an empty `OrderRequestDto` and logs the cause when the circuit opens.
+- Fallback method `createOrderFallback()` returns an empty `OrderRequestDto` and logs the cause when the circuit opens
+- Circuit Breaker now also protects the **Shipping Service call** inside `createOrder` — if Shipping is down, the fallback triggers **[NEW]**
 
 ### 🗄️ Data Model
 
@@ -100,8 +116,14 @@ Product { id, title, price, stock }
 **Order Service** — `orders` + `order_items` tables:
 
 ```
-Orders { id, orderStatus (CONFIRMED/CANCELLED/PENDING), totalPrice }
+Orders { id, orderStatus (CONFIRMED/CANCELLED/PENDING), totalPrice, shippingAddress }
   └── OrderItem { id, productId, quantity, order_id }
+```
+
+**Shipping Service** — `shipments` table **[NEW]**:
+
+```
+Shipment { id, orderId, shippingAddress, status (INITIATED/IN_TRANSIT/DELIVERED/FAILED) }
 ```
 
 ---
@@ -115,6 +137,7 @@ Orders { id, orderStatus (CONFIRMED/CANCELLED/PENDING), totalPrice }
 | `GET` | `/products` | List all products with stock |
 | `GET` | `/products/{id}` | Get product by ID |
 | `PUT` | `/products/reduce-stocks` | Deduct stock for an order (called by Order Service) |
+| `PUT` | `/products/restock-items` | Add stock back on cancellation (called by Order Service) **[NEW]** |
 | `GET` | `/products/fetchOrders` | Test endpoint — calls Order Service via Feign |
 
 ### 📋 Order Service — via Gateway at `/orders`
@@ -123,8 +146,16 @@ Orders { id, orderStatus (CONFIRMED/CANCELLED/PENDING), totalPrice }
 |---|---|---|
 | `GET` | `/core` | List all orders |
 | `GET` | `/core/{id}` | Get order by ID |
-| `POST` | `/core/create-order` | Create order (triggers stock reduction + Circuit Breaker) |
+| `POST` | `/core/create-order` | Create order (triggers stock reduction + shipping initiation + Circuit Breaker) |
+| `DELETE` | `/core/{id}` | Cancel order and restock items **[NEW]** |
 | `GET` | `/core/helloOrders` | Health check / Feign test endpoint |
+
+### 🚚 Shipping Service — via Gateway at `/shipping` **[NEW]**
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/shipments/initiate` | Create a new shipment for a confirmed order |
+| `GET` | `/shipments/{id}` | Get current shipment status |
 
 ### Request body for `POST /orders/core/create-order`
 
@@ -133,7 +164,22 @@ Orders { id, orderStatus (CONFIRMED/CANCELLED/PENDING), totalPrice }
   "items": [
     { "productId": 1, "quantity": 2 },
     { "productId": 3, "quantity": 1 }
-  ]
+  ],
+  "shippingAddress": "Pune, Maharashtra, India"
+}
+```
+
+### Response for `DELETE /orders/core/{id}`
+
+```json
+{
+  "id": 1,
+  "items": [
+    { "productId": 1, "quantity": 2 },
+    { "productId": 3, "quantity": 1 }
+  ],
+  "totalPrice": 1899.97,
+  "orderStatus": "CANCELLED"
 }
 ```
 
@@ -161,27 +207,40 @@ Orders { id, orderStatus (CONFIRMED/CANCELLED/PENDING), totalPrice }
 
 ```
 eCommerce/
-├── api-gateway/                          ← Port 8080 | Spring Cloud Gateway
+├── api-gateway/                              ← Port 8080 | Spring Cloud Gateway
 │   └── src/main/resources/
-│       └── application.yml              ← Route definitions
+│       └── application.yml                  ← Route definitions (incl. /shipping/**)
 │
-├── discovery-service/                    ← Port 8761 | Netflix Eureka Server
+├── discovery-service/                        ← Port 8761 | Netflix Eureka Server
 │
-├── inventory-service/                    ← Port 9010 | Product & stock management
+├── inventory-service/                        ← Port 8081 | Product & stock management
 │   └── src/main/java/.../inventory_service/
-│       ├── clients/OrdersFeignClient     ← Feign client → Order Service
-│       ├── controller/ProductController
-│       ├── service/ProductService        ← reduceStocks() transactional logic
+│       ├── clients/OrdersFeignClient         ← Feign client → Order Service
+│       ├── controller/ProductController      ← includes PUT /restock-items [NEW]
+│       ├── service/ProductService            ← reduceStocks() + restockItems() [NEW]
 │       ├── entity/Product
 │       └── dto/
 │
-└── order-service/                        ← Order creation & management
-    └── src/main/java/.../order_service/
-        ├── clients/InventoryOpenFeignClient  ← Feign client → Inventory Service
-        ├── controller/OrdersController
-        ├── service/OrdersService         ← @CircuitBreaker on createOrder()
-        ├── entity/{Orders, OrderItem, OrderStatus}
-        └── dto/
+├── order-service/                            ← Port 9020 | Order creation & management
+│   └── src/main/java/.../order_service/
+│       ├── clients/
+│       │   ├── InventoryOpenFeignClient      ← reduceStocks() + restockItems() [NEW]
+│       │   └── ShippingOpenFeignClient       ← initiateShipping() [NEW]
+│       ├── controller/OrdersController       ← includes DELETE /{id} [NEW]
+│       ├── service/OrdersService             ← cancelOrder() [NEW] + shipping call in createOrder()
+│       ├── entity/{Orders, OrderItem, OrderStatus}
+│       └── dto/
+│           ├── OrderRequestDto               ← added shippingAddress field [NEW]
+│           ├── OrderRequestItemDto
+│           └── ShipmentRequestDto            ← [NEW]
+│
+└── shipping-service/                         ← Port 8083 | Shipment tracking [NEW]
+    └── src/main/java/.../shipping_service/
+        ├── controller/ShippingController     ← POST /initiate, GET /{id}
+        ├── service/ShippingService           ← initiateShipping(), getShipmentStatus()
+        ├── entity/{Shipment, ShipmentStatus}
+        ├── repository/ShipmentRepository
+        └── dto/ShipmentRequestDto
 ```
 
 ---
@@ -196,51 +255,79 @@ eCommerce/
 
 ### Database Setup
 
-Create two databases in PostgreSQL:
+Create databases in PostgreSQL:
 
 ```sql
 CREATE DATABASE inventoryDB;
 CREATE DATABASE orderDB;
+CREATE DATABASE shippingDB;
 ```
 
 ### Configuration
 
-Update credentials in the `application.properties` of each service:
+Each service has an `application-example-properties` file. Copy it to `application.properties` and fill in your credentials:
 
 ```properties
-# inventory-service/src/main/resources/application.properties
+# inventory-service
 spring.datasource.url=jdbc:postgresql://localhost:5432/inventoryDB
 spring.datasource.username=your_username
 spring.datasource.password=your_password
 
-# order-service/src/main/resources/application.properties
+# order-service
 spring.datasource.url=jdbc:postgresql://localhost:5432/orderDB
+spring.datasource.username=your_username
+spring.datasource.password=your_password
+
+# shipping-service
+spring.datasource.url=jdbc:postgresql://localhost:5432/shippingDB
 spring.datasource.username=your_username
 spring.datasource.password=your_password
 ```
 
 ### Boot Order
 
+Always start Eureka first — every other service registers with it on startup.
+
 ```bash
-# 1. Start Eureka Discovery Server first
+# 1. Eureka must be up first
 cd discovery-service && ./mvnw spring-boot:run
 
-# 2. Start the API Gateway
+# 2. API Gateway
 cd api-gateway && ./mvnw spring-boot:run
 
-# 3. Start application services (any order)
+# 3. Application services (any order)
 cd inventory-service && ./mvnw spring-boot:run
 cd order-service && ./mvnw spring-boot:run
+cd shipping-service && ./mvnw spring-boot:run
 ```
 
 Verify all services registered at: **`http://localhost:8761`**
+
+### Quick Test Flow
+
+```bash
+# 1. Place an order (reduces stock + creates shipment)
+POST http://localhost:8080/orders/core/create-order
+
+# 2. Check stock was reduced
+GET http://localhost:8080/inventory/products/1
+
+# 3. Check shipment was created
+GET http://localhost:8080/shipping/shipments/1
+
+# 4. Cancel the order (restocks inventory)
+DELETE http://localhost:8080/orders/core/1
+
+# 5. Verify stock is back
+GET http://localhost:8080/inventory/products/1
+```
 
 ### Observability
 
 Circuit breaker health is exposed via Actuator:
 
 ```
-GET http://localhost:<order-service-port>/actuator/health
+GET http://localhost:9020/actuator/health
 ```
 
 ---
@@ -255,6 +342,9 @@ GET http://localhost:<order-service-port>/actuator/health
 | 12.4 | Spring Cloud API Gateway | ✅ |
 | 12.5 | OpenFeign Microservice Communication | ✅ |
 | 12.6 | Circuit Breaker, Retry & Rate Limiter with Resilience4j | ✅ |
+| HW | MakeMyTrip Architecture Breakdown & Flow Design | ✅ |
+| HW | Cancel Order + Inventory Restocking | ✅ |
+| HW | ShippingService + Circuit Breaker Fallback + Retry | ✅ |
 
 ---
 
