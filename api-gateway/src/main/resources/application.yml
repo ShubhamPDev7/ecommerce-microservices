@@ -23,6 +23,7 @@ spring:
                 - Path=/orders/**
               filters:
                 - StripPrefix=1
+                - name: LoggingOrdersFilter
 
             - id: shipping-service
               uri: lb://SHIPPING-SERVICE
